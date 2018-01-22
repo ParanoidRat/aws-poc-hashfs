@@ -1,0 +1,41 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    }
+
+  },
+
+  "Resources" : {
+    
+  },
+
+  "Outputs" : {
+    "": {
+      "Description" : "",
+      "Value" : { "Ref" : "" }
+    }    
+  }
+
+}

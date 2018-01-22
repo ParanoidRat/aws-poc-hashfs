@@ -1,0 +1,106 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Deploys DynamoDB tables required for HashFS",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "DynamoDB Configuration" },
+          "Parameters" : [ "ReadCapacityUnits", "WriteCapacityUnits" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+
+    "ReadCapacityUnits" : {
+      "Description" : "Provisioned read throughput for DynamoDB tables",
+      "Type" : "Number",
+      "Default" : "2",
+      "MinValue": "1",
+      "MaxValue": "10000",
+      "ConstraintDescription" : "must be between 1 and 10000"
+    },
+
+    "WriteCapacityUnits" : {
+      "Description" : "Provisioned write throughput for DynamoDB tables",
+      "Type" : "Number",
+      "Default" : "2",
+      "MinValue": "1",
+      "MaxValue": "10000",
+      "ConstraintDescription" : "must be between 1 and 10000"
+    }
+  },
+
+  "Resources" : {
+    "DynamoDBHashFSFiles" : {
+      "Type" : "AWS::DynamoDB::Table",
+      "Properties" : {
+        "AttributeDefinitions": [ 
+          { "AttributeName" : "ContentHash", "AttributeType" : "S" }
+        ],
+        "KeySchema": [
+          { "AttributeName": "ContentHash", "KeyType": "HASH" }
+        ],
+        "ProvisionedThroughput" : {
+          "ReadCapacityUnits" : {"Ref" : "ReadCapacityUnits"},
+          "WriteCapacityUnits" : {"Ref" : "WriteCapacityUnits"}
+        }                
+      }
+    },
+
+    "DynamoDBHashFSLocations" : {
+      "Type" : "AWS::DynamoDB::Table",
+      "Properties" : {
+        "AttributeDefinitions": [
+          { "AttributeName" : "Volume", "AttributeType" : "S" },
+          { "AttributeName" : "VolumePath", "AttributeType" : "S" },
+          { "AttributeName" : "VolumePathHash", "AttributeType" : "S" }
+        ],
+        "KeySchema": [
+          { "AttributeName": "Volume", "KeyType": "HASH" },
+          { "AttributeName": "VolumePathHash", "KeyType": "RANGE" }
+        ],
+        "LocalSecondaryIndexes": [ {
+          "IndexName": "PathIndex",
+          "KeySchema": [
+            { "AttributeName": "Volume", "KeyType": "HASH" },
+            { "AttributeName": "VolumePath", "KeyType": "RANGE" }
+          ],
+          "Projection": { "ProjectionType": "ALL" }
+        } ],        
+        "ProvisionedThroughput" : {
+          "ReadCapacityUnits" : {"Ref" : "ReadCapacityUnits"},
+          "WriteCapacityUnits" : {"Ref" : "WriteCapacityUnits"}
+        }                
+      }
+    }
+  },
+
+  "Outputs" : {
+    "DynamoDBHashFSFiles": {
+      "Description" : "Name of HashFS Files table",
+      "Value" : { "Ref" : "DynamoDBHashFSFiles" }
+    },
+    "DynamoDBHashFSLocations": {
+      "Description" : "Name of HashFS Locations table",
+      "Value" : { "Ref" : "DynamoDBHashFSLocations" }
+    }    
+  }
+
+}

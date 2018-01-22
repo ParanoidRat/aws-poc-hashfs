@@ -1,0 +1,192 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Deploys Lambda function SnapshotWorker to periodically create code volume snapshots.",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "Function Configuration" },
+          "Parameters" : [ "LCodeS3Bucket", "LCodeS3Key", "LTimeout", "LMemSize", "LScheduleExpression", "SnapshotQueueArn" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+    "LCodeS3Bucket" : {
+      "Description" : "S3 bucket with Lambda function code",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "lambda-bucket",
+      "ConstraintDescription": "must be between 1 and 255 characters in length"
+    },
+    "LCodeS3Key" : {
+      "Description" : "ZIP file in LCodeS3Bucket containing the Lambda function code",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "lambda-worker.zip",
+      "ConstraintDescription": "must be between 1 and 255 characters in length"
+    },
+    "LTimeout" : {
+      "Description" : " Maximum execution time after which Lambda function is terminated (in seconds)",
+      "Type" : "Number",
+      "Default" : "60",
+      "MinValue": "3",
+      "MaxValue": "300",
+      "ConstraintDescription": "must be between 3 and 300"
+    },
+    "LMemSize" : {
+      "Description" : "Memory that is allocated to Lambda function (in MB)",
+      "Type" : "Number",
+      "Default" : "128",
+      "MinValue": "128",
+      "MaxValue": "1536",
+      "ConstraintDescription": "must be between 128 and 1536 in increments of 64"
+    },
+    "LScheduleExpression" : {
+      "Description" : "Schedule or rate that determines when CloudWatch Events runs the Lambda",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "rate(60 minutes)",
+      "ConstraintDescription": "must conform to schedule expression syntax"
+    },
+    "SnapshotQueueArn" : {
+      "Description" : "ARN for the queue to signal Snapshot Checker",
+      "Type" : "String",
+      "AllowedPattern" : "arn:aws:sqs:.*",
+      "ConstraintDescription" : "must be an SQS queue ARN"
+    }    
+  },
+
+  "Resources" : {
+    "SnapshotWorker": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Handler": "snapshot_worker.handler",
+        "Role": { "Fn::GetAtt" : ["SnapshotWorkerRole", "Arn"] },
+        "Code": {
+          "S3Bucket": { "Ref": "LCodeS3Bucket" },
+          "S3Key": { "Ref": "LCodeS3Key" }
+        },
+        "Runtime": "python2.7",
+        "Timeout": { "Ref": "LTimeout" },
+        "MemorySize": { "Ref": "LMemSize" }
+      }
+    },
+
+    "SnapshotWorkerScheduledRule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Description": "Scheduled Rule for Snapshot Worker",
+        "ScheduleExpression": { "Ref": "LScheduleExpression" },
+        "State": "ENABLED",
+        "Targets": [{
+          "Arn": { "Fn::GetAtt": ["SnapshotWorker", "Arn"] },
+          "Id": "TargetFunctionV1"
+        }]
+      }
+    },
+
+    "PermissionForEventsToInvokeLambda": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": { "Ref": "SnapshotWorker" },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "events.amazonaws.com",
+        "SourceArn": { "Fn::GetAtt": ["SnapshotWorkerScheduledRule", "Arn"] }
+      }
+    },    
+
+    "SnapshotWorkerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Sid": "1",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "SnapshotWorkerPolicy",
+          "PolicyDocument": {
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "logs:*"
+                ],
+                "Resource": "arn:aws:logs:*:*:*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:Describe*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "s3:GetObject"
+                ],
+                "Resource": { "Fn::Join":[ "", [ "arn:aws:s3:::", { "Ref": "LCodeS3Bucket" }, "/*" ] ] }
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:CreateSnapshot",
+                  "ec2:CreateTags",
+                  "ec2:DeleteSnapshot",
+                  "ec2:ModifySnapshotAttribute",
+                  "ec2:ResetSnapshotAttribute"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "sqs:ListQueues",
+                  "sqs:GetQueueUrl",
+                  "sqs:SendMessage"
+                ],
+                "Resource": { "Ref": "SnapshotQueueArn" }
+              }              
+            ]
+          }          
+        }]
+      }
+    }    
+  },
+
+  "Outputs" : {
+    "SnapshotWorkerScheduledRule": {
+      "Description" : "",
+      "Value" : { "Fn::GetAtt": ["SnapshotWorkerScheduledRule", "Arn"] }
+    }    
+  }
+
+}

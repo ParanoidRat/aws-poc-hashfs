@@ -1,0 +1,42 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Deploys SQS queues used by Snapshot worker and checker",
+
+  "Resources" : {
+    "CheckingSnapQueue" : {
+      "Type" : "AWS::SQS::Queue",
+      "Properties" : {
+        "VisibilityTimeout": 300,
+        "RedrivePolicy": {
+          "deadLetterTargetArn" : { "Fn::GetAtt" : [ "DeadLetterCheckingSnapQueue" , "Arn" ] },
+          "maxReceiveCount" : 5
+        }
+      }
+    },    
+
+    "DeadLetterCheckingSnapQueue" : {
+      "Type" : "AWS::SQS::Queue"
+    }    
+  },
+
+  "Outputs" : {
+    "CheckingSnapQueueURL" : {
+      "Description" : "URL of the snapshot checking queue",
+      "Value" : { "Ref" : "CheckingSnapQueue" }
+    },
+    "CheckingSnapQueueARN" : {
+      "Description" : "ARN of the snapshot checking queue",
+      "Value" : { "Fn::GetAtt" : ["CheckingSnapQueue", "Arn"]}
+    },
+    "DeadLetterCheckingSnapQueueURL" : {
+      "Description" : "URL of the dead letter queue",
+      "Value" : { "Ref" : "DeadLetterCheckingSnapQueue" }
+    },
+    "DeadLetterCheckingSnapQueueARN" : {
+      "Description" : "ARN of the dead letter queue",
+      "Value" : { "Fn::GetAtt" : ["DeadLetterCheckingSnapQueue", "Arn"]}
+    }     
+  }
+
+}

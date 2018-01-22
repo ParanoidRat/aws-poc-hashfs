@@ -1,0 +1,455 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "Network Configuration" },
+          "Parameters" : [ "VpcId", "VpcSubnet" ] },
+
+        { "Label" : { "default":"Instance Configuration" },
+          "Parameters" : [ "InstanceType", "StorageType", "SSHKeyName", "SSHLocation" ] },
+
+        { "Label" : { "default":"CacheCluster Configuration" },
+          "Parameters" : [ "CacheNodeType", "NumberOfCacheNodes" ] },
+
+        { "Label" : { "default" : "MySQL Database Configuration" },
+          "Parameters" : [ "DBInstanceType", "DBName", "DBUser", "DBPassword" ] },
+
+        { "Label" : { "default" : "DynamoDB Configuration" },
+          "Parameters" : [ "ReadCapacityUnits", "WriteCapacityUnits" ] },
+
+        { "Label" : { "default" : "ELB & Autoscaling Configuration" },
+          "Parameters" : [ "InstanceCount", "SSLCertName" ] },
+
+        { "Label" : { "default" : "Snapshot Worker Configuration" },
+          "Parameters" : ["SnapshotWorkerCodeS3Bucket", "SnapshotWorkerCodeS3Key", "SnapshotWorkerTimeout", "SnapshotWorkerMemSize", "SnapshotWorkerScheduleExpression" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+    "InstanceCount" : {
+      "Description" : "Number of EC2 instances to launch",
+      "Type": "Number",
+      "Default": "2",
+      "MinValue": "1",
+      "MaxValue": "5",
+      "ConstraintDescription" : "must be between 1 and 5"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t2.micro" ],
+      "ConstraintDescription" : "must be a valid EC2 instance type"
+    },
+    "StorageType" : {
+      "Description" : "Root storage volume type for the instance",
+      "Type" : "String",
+      "Default" : "EBS-SSD",
+      "AllowedValues" : [ "EBS-SSD", "INSTANCE-STORE" ],
+      "ConstraintDescription" : "must be either EBS-SSD or INSTANCE-STORE"
+    },
+    "CacheNodeType" : {
+      "Description" : "The compute and memory capacity of the nodes in the Cache Cluster",
+      "Type" : "String",
+      "Default" : "cache.t2.micro",
+      "AllowedValues" : [ "cache.t2.micro" ],
+      "ConstraintDescription" : "must be a valid Cache Node type"
+    },
+    "NumberOfCacheNodes" : {
+      "Description" : "The number of Cache Nodes the Cache Cluster should have",
+      "Type": "Number",
+      "Default": "1",
+      "MinValue": "1",
+      "MaxValue": "5",
+      "ConstraintDescription" : "must be between 1 and 5"
+    },
+    "DBName": {
+      "Description" : "The database name",
+      "Type": "String",
+      "Default": "MyDB",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+    "DBUser": {
+      "NoEcho": "true",
+      "Description" : "The database admin account username",
+      "Type": "String",
+      "Default": "MyDBuser",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description" : "The database admin account password",
+      "Type": "String",
+      "Default": "MyDBpassword",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+    "DBInstanceType" : {
+      "Description" : "The computation and memory capacity of the DB instance",
+      "Type" : "String",
+      "Default" : "db.t2.micro",
+      "AllowedValues" : [ "db.t2.micro" ],
+      "ConstraintDescription" : "must be a valid DB instance class"
+    },
+    "ReadCapacityUnits" : {
+      "Description" : "Provisioned read throughput for DynamoDB tables",
+      "Type" : "Number",
+      "Default" : "2",
+      "MinValue": "1",
+      "MaxValue": "10000",
+      "ConstraintDescription" : "must be between 1 and 10000"
+    },
+    "WriteCapacityUnits" : {
+      "Description" : "Provisioned write throughput for DynamoDB tables",
+      "Type" : "Number",
+      "Default" : "2",
+      "MinValue": "1",
+      "MaxValue": "10000",
+      "ConstraintDescription" : "must be between 1 and 10000"
+    },
+    "SSLCertName": {
+      "Description" : "IAM SSL Certificate for ELB",
+      "Type": "String",
+      "Default": "snakeoil",
+      "ConstraintDescription" : "must be the name of an existing IAM SSL Certificate"
+    },
+    "VpcId": {
+      "Description": "Virtual Private Cloud (VPC) to deploy resources",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-eaae0a8d",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    },
+    "VpcSubnet": {
+      "Description": "VPC subnet to associate with the instance",
+      "Type": "AWS::EC2::Subnet::Id",
+      "Default": "subnet-4e7d3064",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    },
+    "SSHKeyName": {
+      "Description" : "EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "aws-test-key",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair"
+    },
+    "SSHLocation" : {
+      "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "71.187.38.77/32",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+    },
+    "WebAppGitRepo" : {
+      "Description" : "URL to the git repo with a vulnerable web app",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "paranoidrat-hashfs",
+      "ConstraintDescription": "must be between 3 and 255 characters"
+    },
+    "SnapshotWorkerCodeS3Bucket" : {
+      "Description" : "S3 bucket with HashFS code",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "lambda-bucket",
+      "ConstraintDescription": "must be between 1 and 255 characters in length"
+    },
+    "SnapshotWorkerCodeS3Key" : {
+      "Description" : "ZIP file in LambdaCodeS3Bucket containing the Lambda function code",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "lambda-worker.zip",
+      "ConstraintDescription": "must be between 1 and 255 characters in length"
+    },
+    "SnapshotWorkerTimeout" : {
+      "Description" : " Maximum execution time after which Lambda function is terminated (in seconds)",
+      "Type" : "Number",
+      "Default" : "60",
+      "MinValue": "3",
+      "MaxValue": "300",
+      "ConstraintDescription": "must be between 3 and 300"
+    },
+    "SnapshotWorkerMemSize" : {
+      "Description" : "Memory that is allocated to Lambda function (in MB)",
+      "Type" : "Number",
+      "Default" : "128",
+      "MinValue": "128",
+      "MaxValue": "1536",
+      "ConstraintDescription": "must be between 128 and 1536 in increments of 64"
+    },
+    "SnapshotWorkerScheduleExpression" : {
+      "Description" : "Schedule or rate that determines when CloudWatch Events runs the Lambda",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "rate(60 minutes)",
+      "ConstraintDescription": "must conform to schedule expression syntax"
+    }
+  },
+
+  "Resources" : {
+    "LabSGs": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabSGs.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "SSHLocation": {
+            "Ref": "SSHLocation"
+          },
+          "VpcId": {
+            "Ref": "VpcId"
+          }
+        }
+      }
+    },
+
+    "LabDB": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn" : "LabSGs",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabDB.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "DBInstanceType": {
+            "Ref": "DBInstanceType"
+          },
+          "DBName": {
+            "Ref": "DBName"
+          },
+          "DBUser": {
+            "Ref": "DBUser"
+          },
+          "DBPassword": {
+            "Ref": "DBPassword"
+          },
+          "DBSecurityGroupId": {
+            "Fn::GetAtt" : [ "LabSGs", "Outputs.DBSecurityGroupId" ]
+          },
+          "VpcId": {
+            "Ref": "VpcId"
+          }
+        }
+      }
+    },
+
+    "LabCache": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn" : "LabSGs",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabCache.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "CacheNodeType": {
+            "Ref": "CacheNodeType"
+          },
+          "NumberOfCacheNodes": {
+            "Ref": "NumberOfCacheNodes"
+          },
+          "CacheSecurityGroupId": {
+            "Fn::GetAtt" : [ "LabSGs", "Outputs.CacheSecurityGroupId" ]
+          },
+          "VpcSubnet": {
+            "Ref": "VpcSubnet"
+          },
+          "VpcId": {
+            "Ref": "VpcId"
+          }
+        }
+      }
+    },
+
+    "LabDynamoDB": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn" : "LabSGs",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabDynamoDB.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "ReadCapacityUnits": {
+            "Ref": "ReadCapacityUnits"
+          },
+          "WriteCapacityUnits": {
+            "Ref": "WriteCapacityUnits"
+          }
+        }
+      }
+    },
+
+    "LabWebFront": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn" : "LabSGs",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabWebFront.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "InstanceCount": {
+            "Ref": "InstanceCount"
+          },
+          "InstanceType": {
+            "Ref": "InstanceType"
+          },
+          "StorageType": {
+            "Ref": "StorageType"
+          },
+          "SSHKeyName": {
+            "Ref": "SSHKeyName"
+          },
+          "InstanceSecurityGroupId": {
+            "Fn::GetAtt" : [ "LabSGs", "Outputs.InstanceSecurityGroupId" ]
+          },
+          "LoadBalancerSecurityGroupId": {
+            "Fn::GetAtt" : [ "LabSGs", "Outputs.LoadBalancerSecurityGroupId" ]
+          },
+          "WebAppGitRepo": {
+            "Ref": "WebAppGitRepo"
+          },
+          "HashFSCodeBucket": {
+            "Ref": "SnapshotWorkerCodeS3Bucket"
+          },
+          "HashFSFilesTable": {
+            "Fn::GetAtt" : [ "LabDynamoDB", "Outputs.DynamoDBHashFSFiles" ]
+          },
+          "HashFSLocationsTable": {
+            "Fn::GetAtt" : [ "LabDynamoDB", "Outputs.DynamoDBHashFSLocations" ]
+          },
+          "CacheClusterId": {
+            "Fn::GetAtt" : [ "LabCache", "Outputs.CacheClusterId" ]
+          },
+          "DBHost": {
+            "Fn::GetAtt" : [ "LabDB", "Outputs.DBHost" ]
+          },
+          "DBUser": {
+            "Ref": "DBUser"
+          },
+          "DBPassword": {
+            "Ref": "DBPassword"
+          },
+          "DBName": {
+            "Ref": "DBName"
+          },
+          "SSLCertName": {
+            "Ref": "SSLCertName"
+          },
+          "VpcSubnet": {
+            "Ref": "VpcSubnet"
+          },
+          "VpcId": {
+            "Ref": "VpcId"
+          }
+        }
+      }
+    },
+
+    "LabLambdaSnapshotWorker": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn" : "LabSGs",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabLambdaSnapshotWorker.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        "Parameters": {
+          "ProjectTag": {
+            "Ref": "ProjectTag"
+          },
+          "LCodeS3Bucket": {
+            "Ref": "SnapshotWorkerCodeS3Bucket"
+          },
+          "LCodeS3Key": {
+            "Ref": "SnapshotWorkerCodeS3Key"
+          },
+          "LTimeout": {
+            "Ref": "SnapshotWorkerTimeout"
+          },
+          "LMemSize": {
+            "Ref": "SnapshotWorkerMemSize"
+          },
+          "LScheduleExpression": {
+            "Ref": "SnapshotWorkerScheduleExpression"
+          },
+          "SnapshotQueueArn": {
+            "Fn::GetAtt" : [ "LabQueues", "Outputs.CheckingSnapQueueARN" ]
+          }
+        }
+      }
+    },
+
+    "LabQueues": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": "https://s3.amazonaws.com/paranoidrat-cf-templates/Template_DFIR_LabQueues.json",
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "TestURL": {
+      "Description" : "URL for test page",
+      "Value" : { "Fn::GetAtt" : [ "LabWebFront", "Outputs.TestURL" ] }
+    },
+    "WebappURL": {
+      "Description" : "URL for web app",
+      "Value" : { "Fn::GetAtt" : [ "LabWebFront", "Outputs.WebappURL" ] }
+    }
+  }
+
+}

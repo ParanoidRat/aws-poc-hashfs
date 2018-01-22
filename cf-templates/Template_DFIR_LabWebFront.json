@@ -1,0 +1,1019 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Creates ELB in front of Autoscaling Group of Ubuntu 16.04 + EBS volume for webapp code. Deploys AWS cfn-bootstrap utilities, Apache2, PHP7, ElastiCache Cluster Client (memcached). Configures PHP to store session in memcached. Gets PHP webapp code from CodeCommit Git repo and configures it to use MySQL credentials from the stack. Deploys and runs HashFS initialization script recording hashes of all code files as well as corresponding file system metadata.",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "Network Configuration" },
+          "Parameters" : [ "VpcId", "VpcSubnet" ] },
+
+        { "Label" : { "default":"Instance Configuration" },
+          "Parameters" : [ "InstanceType", "StorageType", "SSHKeyName", "InstanceSecurityGroupId" ] },
+
+        { "Label" : { "default" : "ELB & Autoscaling Configuration" },
+          "Parameters" : [ "InstanceCount", "SSLCertName" ] },
+
+        { "Label" : { "default" : "HashFS Configuration" },
+          "Parameters" : [ "HashFSCodeBucket", "HashFSFilesTable", "HashFSLocationsTable", "WebAppGitRepo" ] },
+
+        { "Label" : { "default":"CacheCluster Configuration" },
+          "Parameters" : [ "CacheClusterId" ] },
+
+        { "Label" : { "default" : "MySQL Database Configuration" },
+          "Parameters" : [ "DBHost", "DBName", "DBUser", "DBPassword" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+
+    "InstanceCount" : {
+      "Description" : "Number of EC2 instances to launch in the auto scaling group",
+      "Type": "Number",
+      "Default": "2",
+      "MinValue": "1",
+      "MaxValue": "5",
+      "ConstraintDescription" : "must be between 1 and 5"
+    },
+
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t2.micro" ],
+      "ConstraintDescription" : "must be a valid EC2 instance type"
+    },
+
+    "StorageType" : {
+      "Description" : "Root storage volume type for the instance",
+      "Type" : "String",
+      "Default" : "EBS-SSD",
+      "AllowedValues" : [ "EBS-SSD", "INSTANCE-STORE" ],
+      "ConstraintDescription" : "must be either EBS-SSD or INSTANCE-STORE"
+    },
+
+    "SSHKeyName": {
+      "Description" : "EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "aws-test-key",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair"
+    },
+
+    "InstanceSecurityGroupId": {
+      "Description": "Security Group ID to control access to the instances",
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Default": "sg-8ce572f7",
+      "ConstraintDescription": "must be the name of an existing VPC Security Group"
+    },
+
+   "LoadBalancerSecurityGroupId": {
+      "Description": "Security Group ID to control access to the ELB",
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Default": "sg-8ce572f7",
+      "ConstraintDescription": "must be the name of an existing VPC Security Group"
+    },
+
+    "SSLCertName": {
+      "Description" : "IAM SSL Certificate for ELB",
+      "Type": "String",
+      "Default": "snakeoil",
+      "ConstraintDescription" : "must be the name of an existing IAM SSL Certificate"
+    },
+
+    "WebAppGitRepo" : {
+      "Description" : "URL to the git repo with a vulnerable web app",
+      "Type" : "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default" : "paranoidrat-hashfs",
+      "ConstraintDescription": "must be between 3 and 255 characters"
+    },
+
+    "HashFSCodeBucket" : {
+      "Description" : "S3 bucket holding HashFS code",
+      "Type" : "String",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "Default" : "paranoidrat-hashfs",
+      "ConstraintDescription": "must be between 3 and 255 characters"
+    },
+
+    "HashFSFilesTable" : {
+      "Description" : "Name of the DynamoDB table to store HashFS-Files data",
+      "Type" : "String",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "Default" : "HashFS-Files",
+      "ConstraintDescription": "must be between 3 and 255 characters"
+    },
+
+    "HashFSLocationsTable" : {
+      "Description" : "Name of the DynamoDB table to store HashFS-Locations data",
+      "Type" : "String",
+      "MinLength": "3",
+      "MaxLength": "255",
+      "Default" : "HashFS-Locations",
+      "ConstraintDescription": "must be between 3 and 255 characters"
+    },
+
+    "CacheClusterId": {
+      "Description" : "The ElastiCache Cluster ID",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9_-]*",
+      "Default": "CacheClusterId",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBHost" : {
+      "Description" : "MySQL host",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "Default": "dummyrdshost.us-east-1.rds.amazonaws.com",
+      "AllowedPattern": "(([a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z]|[A-Za-z][A-Za-z0-9\\-]*[A-Za-z0-9])",
+      "ConstraintDescription": "must be a valid DNS name of the MySQL host"
+    },
+
+    "DBName": {
+      "Description" : "The database name",
+      "Type": "String",
+      "Default": "MyDB",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBUser": {
+      "NoEcho": "true",
+      "Description" : "The database admin account username",
+      "Type": "String",
+      "Default": "MyDBuser",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description" : "The database admin account password",
+      "Type": "String",
+      "Default": "MyDBpassword",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+
+    "VpcId": {
+      "Description": "Virtual Private Cloud (VPC) to deploy resources",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-eaae0a8d",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    },
+
+    "VpcSubnet": {
+      "Description": "VPC subnet to associate with the instance",
+      "Type": "AWS::EC2::Subnet::Id",
+      "Default": "subnet-4e7d3064",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    }
+  },
+
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "PV64"   },
+      "t2.nano"     : { "Arch" : "HVM64"  },
+      "t2.micro"    : { "Arch" : "HVM64"  },
+      "t2.small"    : { "Arch" : "HVM64"  },
+      "t2.medium"   : { "Arch" : "HVM64"  },
+      "t2.large"    : { "Arch" : "HVM64"  },
+      "m1.small"    : { "Arch" : "PV64"   },
+      "m1.medium"   : { "Arch" : "PV64"   },
+      "m1.large"    : { "Arch" : "PV64"   },
+      "m1.xlarge"   : { "Arch" : "PV64"   },
+      "m2.xlarge"   : { "Arch" : "PV64"   },
+      "m2.2xlarge"  : { "Arch" : "PV64"   },
+      "m2.4xlarge"  : { "Arch" : "PV64"   },
+      "m3.medium"   : { "Arch" : "HVM64"  },
+      "m3.large"    : { "Arch" : "HVM64"  },
+      "m3.xlarge"   : { "Arch" : "HVM64"  },
+      "m3.2xlarge"  : { "Arch" : "HVM64"  },
+      "m4.large"    : { "Arch" : "HVM64"  },
+      "m4.xlarge"   : { "Arch" : "HVM64"  },
+      "m4.2xlarge"  : { "Arch" : "HVM64"  },
+      "m4.4xlarge"  : { "Arch" : "HVM64"  },
+      "m4.10xlarge" : { "Arch" : "HVM64"  },
+      "c1.medium"   : { "Arch" : "PV64"   },
+      "c1.xlarge"   : { "Arch" : "PV64"   },
+      "c3.large"    : { "Arch" : "HVM64"  },
+      "c3.xlarge"   : { "Arch" : "HVM64"  },
+      "c3.2xlarge"  : { "Arch" : "HVM64"  },
+      "c3.4xlarge"  : { "Arch" : "HVM64"  },
+      "c3.8xlarge"  : { "Arch" : "HVM64"  },
+      "c4.large"    : { "Arch" : "HVM64"  },
+      "c4.xlarge"   : { "Arch" : "HVM64"  },
+      "c4.2xlarge"  : { "Arch" : "HVM64"  },
+      "c4.4xlarge"  : { "Arch" : "HVM64"  },
+      "c4.8xlarge"  : { "Arch" : "HVM64"  },
+      "g2.2xlarge"  : { "Arch" : "HVMG2"  },
+      "g2.8xlarge"  : { "Arch" : "HVMG2"  },
+      "r3.large"    : { "Arch" : "HVM64"  },
+      "r3.xlarge"   : { "Arch" : "HVM64"  },
+      "r3.2xlarge"  : { "Arch" : "HVM64"  },
+      "r3.4xlarge"  : { "Arch" : "HVM64"  },
+      "r3.8xlarge"  : { "Arch" : "HVM64"  },
+      "i2.xlarge"   : { "Arch" : "HVM64"  },
+      "i2.2xlarge"  : { "Arch" : "HVM64"  },
+      "i2.4xlarge"  : { "Arch" : "HVM64"  },
+      "i2.8xlarge"  : { "Arch" : "HVM64"  },
+      "d2.xlarge"   : { "Arch" : "HVM64"  },
+      "d2.2xlarge"  : { "Arch" : "HVM64"  },
+      "d2.4xlarge"  : { "Arch" : "HVM64"  },
+      "d2.8xlarge"  : { "Arch" : "HVM64"  },
+      "hi1.4xlarge" : { "Arch" : "HVM64"  },
+      "hs1.8xlarge" : { "Arch" : "HVM64"  },
+      "cr1.8xlarge" : { "Arch" : "HVM64"  },
+      "cc2.8xlarge" : { "Arch" : "HVM64"  }
+    },
+
+    "Ubuntu1604EphemeralRegionArch2AMI" : {
+      "ap-northeast-1"   : {"PV64" : "ami-0522c364", "HVM64" : "ami-0b31d06a"},
+      "ap-southeast-1"   : {"PV64" : "ami-0855836b", "HVM64" : "ami-53518730"},
+      "ap-southeast-2"   : {"PV64" : "ami-66361905", "HVM64" : "ami-ff341b9c"},
+      "eu-central-1"     : {"PV64" : "ami-3be50954", "HVM64" : "ami-b4e10ddb"},
+      "eu-west-1"        : {"PV64" : "ami-f26df981", "HVM64" : "ami-a11581d2"},
+      "sa-east-1"        : {"PV64" : "ami-2053db4c", "HVM64" : "ami-0250d86e"},
+      "us-east-1"        : {"PV64" : "ami-e8ae4585", "HVM64" : "ami-20a64d4d"},
+      "us-west-1"        : {"PV64" : "ami-df423abf", "HVM64" : "ami-95433bf5"},
+      "us-west-2"        : {"PV64" : "ami-dc43bfbc", "HVM64" : "ami-9dbb44fd"},
+      "us-gov-west-1"    : {"PV64" : "ami-ac4af5cd", "HVM64" : "ami-cc4df2ad"}
+    },
+
+    "Ubuntu1604EBSRegionArch2AMI" : {
+      "ap-northeast-1"   : {"PV64" : "ami-f537d694", "HVM64" : "ami-5d38d93c"},
+      "ap-southeast-1"   : {"PV64" : "ami-55518736", "HVM64" : "ami-a35284c0"},
+      "ap-southeast-2"   : {"PV64" : "ami-2b321d48", "HVM64" : "ami-f4361997"},
+      "eu-central-1"     : {"PV64" : "ami-2ce20e43", "HVM64" : "ami-f9e30f96"},
+      "eu-west-1"        : {"PV64" : "ami-2f10845c", "HVM64" : "ami-7a138709"},
+      "sa-east-1"        : {"PV64" : "ami-6c5dd500", "HVM64" : "ami-0d5dd561"},
+      "us-east-1"        : {"PV64" : "ami-bcb853d1", "HVM64" : "ami-13be557e"},
+      "us-west-1"        : {"PV64" : "ami-2e433b4e", "HVM64" : "ami-84423ae4"},
+      "us-west-2"        : {"PV64" : "ami-1cb6497c", "HVM64" : "ami-06b94666"},
+      "us-gov-west-1"    : {"PV64" : "ami-0849f669", "HVM64" : "ami-8f4df2ee"}
+    },
+
+    "Region2CodeDeployDEB" : {
+      "ap-northeast-1"   : {"URL" : "https://aws-codedeploy-ap-northeast-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "ap-southeast-1"   : {"URL" : "https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "ap-southeast-2"   : {"URL" : "https://aws-codedeploy-ap-southeast-2.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "eu-central-1"     : {"URL" : "https://aws-codedeploy-eu-central-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "eu-west-1"        : {"URL" : "https://aws-codedeploy-eu-west-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "sa-east-1"        : {"URL" : "https://aws-codedeploy-sa-east-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "us-east-1"        : {"URL" : "https://aws-codedeploy-us-east-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "us-west-1"        : {"URL" : "https://aws-codedeploy-us-west-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "us-west-2"        : {"URL" : "https://aws-codedeploy-us-west-2.s3.amazonaws.com/latest/codedeploy-agent_all.deb"},
+      "us-gov-west-1"    : {"URL" : "https://aws-codedeploy-us-east-1.s3.amazonaws.com/latest/codedeploy-agent_all.deb"}
+    }
+  },
+
+  "Conditions" : {
+    "CreateEC2InstanceWithEBS" : {"Fn::Equals" : [{"Ref" : "StorageType"}, "EBS-SSD"]}
+  },
+
+  "Resources" : {
+    "EC2InstanceUbuntu1604" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "DependsOn" : "InstanceRoleInstanceProfile",
+      "Metadata" : {
+        "Comment01" : "Install and configure CloudFormation bootstrap helpers",
+        "Comment02" : "Install Apache2 and PHP7",
+        "Comment03" : "",
+        "Comment04" : "NOTE: CodeDeploy agent has an issue of requiring Ruby2.0 package",
+        "Comment05" : " .deb package is useless [https://github.com/aws/aws-codedeploy-agent/issues/61]",
+        "Comment06" : " must use one-time git clone during cfn-init",
+        "Comment07" : "Install and configure Git to work with CloudCommit ",
+        "Comment08" : "Clone the webapp (bWAPP) source from the CloudCommit Git repository",
+        "Comment09" : "Deploy ElastiCache Cluster client and configure PHP to use it",
+        "Comment10" : "Configure PHP and the webapp to use RDS MySQL instance",
+        "Comment11" : "Initialize the webapp, populate HashFS DynamoDB tables with hashes for the webapp code",
+
+        "AWS::CloudFormation::Init" : {
+          "configSets" : {
+            "InstallAndRun" : [
+              "CfnBootstrap",
+              "CodeCommitGitSetup",
+              "GitWebapp",
+              "WebServer",
+              "ElastiCacheClient",
+              "ConfigurePHP",
+              "SetupWebapp",
+              "HashFS"
+            ]
+          },
+
+          "CfnBootstrap" : {
+            "packages" : {
+              "apt" : {
+                "awscli" : [],
+                "mc"     : []
+              }
+            },
+
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.EC2InstanceUbuntu1604.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/usr/local/bin/cfn-init -v",
+                  " --stack ", { "Ref" : "AWS::StackName" },
+                  " --resource EC2InstanceUbuntu1604",
+                  " --configsets InstallAndRun",
+                  " --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            },
+
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+                              "files" : [ "/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf" ] }
+              }
+            }
+          },
+
+          "CodeCommitGitSetup" : {
+            "packages" : {
+              "apt" : {
+                "git"    : []
+              }
+            },
+
+            "commands" : {
+              "01_configure_git_helper" : {
+                  "command" : "git config --system credential.https://git-codecommit.us-east-1.amazonaws.com.helper '!aws --profile default codecommit credential-helper $@'"
+              },
+              "02_configure_git_UseHttpPath" : {
+                  "command" : "git config --system credential.https://git-codecommit.us-east-1.amazonaws.com.UseHttpPath true"
+              },
+              "03_configure_aws_region_us-east-1" : {
+                  "command" : "aws configure set region us-east-1"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          },
+
+          "GitWebapp" : {
+            "commands" : {
+              "01_git_clone" : {
+                  "command" : { "Fn::Join" : ["", [ "git clone --quiet ", {"Ref" : "WebAppGitRepo"}, " /var/www/html" ]]}
+              },
+              "02_chown" : {
+                  "command" : "chown -R www-data:www-data /var/www/html"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          },
+
+          "SetupWebapp" : {
+            "files" : {
+              "/tmp/webapp.settings.php.patch" : {
+                "content" : { "Fn::Join" : ["", [
+                  "--- settings.php.orig  2016-06-20 12:44:51.000000000 -0400\n",
+                  "+++ settings.php 2016-06-20 12:47:53.158240988 -0400\n",
+                  "@@ -17,9 +17,9 @@\n",
+                  " */\n",
+                  "\n",
+                  " // Database connection settings\n",
+                  "-$db_server = \"localhost\";\n",
+                  "-$db_username = \"root\";\n",
+                  "-$db_password = \"bug\";\n",
+                  "-$db_name = \"bWAPP\";\n",
+                  "+$db_server = \"", { "Ref" : "DBHost" }, "\";\n",
+                  "+$db_username = \"", { "Ref" : "DBUser" }, "\";\n",
+                  "+$db_password = \"", { "Ref" : "DBPassword" }, "\";\n",
+                  "+$db_name = \"", { "Ref" : "DBName" }, "\";\n",
+                  "\n",
+                  " // SQLite database name\n"
+                ]]},
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root"
+              }
+            },
+            "commands" : {
+              "01_chmod_webapp_to_add_vuln" : {
+                  "command" : "chmod 777 /var/www/html/passwords/ /var/www/html/images/ /var/www/html/documents/"
+              },
+              "02_apply_webapp_settings_patch" : {
+                  "command" : "patch --silent /var/www/html/admin/settings.php /tmp/webapp.settings.php.patch"
+              },
+              "03_init_webapp" : {
+                  "command" : "curl \"http://localhost/install.php?install=yes\""
+              },
+              "04_cleanup" : {
+                  "command" : "rm /tmp/webapp.settings.php.patch"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          },
+
+          "WebServer" : {
+            "packages" : {
+              "apt" : {
+                "apache2"            : [],
+                "libapache2-mod-php" : [],
+                "php"                : [],
+                "php-mcrypt"         : [],
+                "php-mysql"          : [],
+                "php-curl"           : []
+              }
+            },
+
+            "files" : {
+              "/var/www/html/test-aws.php" : {
+                "content" : { "Fn::Join" : [ "", [
+                  "<html>\n",
+                  "      <head>\n",
+                  "            <title>Test Capabilities</title>\n",
+                  "            <meta http-equiv=\"Content-Type\" content=\"text/html; charset=ISO-8859-1\">\n",
+                  "      </head>\n",
+                  "      <body>\n",
+                  "            <h1>Session Info (memcached)</h1>\n",
+                  "            <p/>\n",
+                  "            <?php\n",
+                  "                  session_start();\n",
+                  "                  if( !isset ( $_SESSION[ 'visit' ] ) ) {\n",
+                  "                      print( 'This is the first time you are visiting this server <p/>' );\n",
+                  "                      $_SESSION['visit'] = 0;\n",
+                  "                  } else {\n",
+                  "                      print( 'Your number of visits: '.$_SESSION['visit'] . '<p/>' );\n",
+                  "                  }    \n",
+                  "                  $_SESSION['visit']++;\n",
+                  "                  print( 'Server IP: ' . $_SERVER['SERVER_ADDR'] . '<p/>' );\n",
+                  "                  print( 'Client IP: ' . $_SERVER['REMOTE_ADDR'] . '<p/>' );\n",
+                  "                  print_r( $_COOKIE );\n",
+                  "            ?>\n",
+                  "            <h1>MySQL Info</h1>\n",
+                  "            <p/>\n",
+                  "            <?php\n",
+                  "                  $host = \"",   { "Ref" : "DBHost" }, "\";\n",
+                  "                  $dbuser = \"", { "Ref" : "DBUser" }, "\";\n",
+                  "                  $dbpass = \"", { "Ref" : "DBPassword" }, "\";\n",
+                  "                  $dbname = \"", { "Ref" : "DBName" }, "\";\n",
+                  "                  $link = new mysqli( $host, $dbuser, $dbpass );\n",
+                  "                  if( $link->connect_error ) {\n",
+                  "                    die( \"Connection failed: \" . $link->connect_error );\n",
+                  "                  }\n",
+                  "                  if( !mysqli_select_db( $link, $dbname ) ) {\n",
+                  "                    die( \"Database \" . $dbname . \" does not exist\" );\n",
+                  "                  } else {\n",
+                  "                    print( \"Connected to <b>\". $dbname .\"</b> successfully as user <b>\" . $dbuser . \"</b>\");\n",
+                  "                  }\n",
+                  "            ?>\n",
+                  "            <h1>Instance Metadata Info</h1>\n",
+                  "            <p/>\n",
+                  "            <?php\n",
+                  "                  $curl_handle = curl_init();\n",
+                  "                  curl_setopt( $curl_handle, CURLOPT_CONNECTTIMEOUT, 2 );\n",
+                  "                  curl_setopt( $curl_handle, CURLOPT_RETURNTRANSFER, 1 );\n",
+                  "                  $meta_base = 'http://169.254.169.254/latest/meta-data/';\n",
+                  "                  $meta_categories = array(\n",
+                  "                        'ami-id',\n",
+                  "                        'ami-launch-index',\n",
+                  "                        'ami-manifest-path',\n",
+                  "                        'hostname',\n",
+                  "                        'instance-action',\n",
+                  "                        'instance-id',\n",
+                  "                        'instance-type',\n",
+                  "                        'local-hostname',\n",
+                  "                        'local-ipv4',\n",
+                  "                        'mac',\n",
+                  "                        'public-hostname',\n",
+                  "                        'public-ipv4',\n",
+                  "                        'reservation-id',\n",
+                  "                        'security-groups'\n",
+                  "                  );\n",
+                  "                  foreach ($meta_categories as &$meta_cat) {\n",
+                  "                        curl_setopt( $curl_handle, CURLOPT_URL, $meta_base . $meta_cat );\n",
+                  "                        $curl_result = curl_exec( $curl_handle );\n",
+                  "                        if ( curl_getinfo( $curl_handle, CURLINFO_HTTP_CODE ) == 404 ) {\n",
+                  "                          print( '<b>' . $meta_cat . '</b> : ' . 'ERROR: got HTTP-404 response back<br />');\n",
+                  "                        } else {\n",
+                  "                          print( '<b>' . $meta_cat . '</b> : ' . $curl_result . '<br />');\n",
+                  "                        }\n",
+                  "                  }\n",
+                  "                  unset( $meta_cat );\n",
+                  "            ?>\n",
+                  "      </body>\n",
+                  "</html>\n"
+                ]]},
+                "mode"  : "000600",
+                "owner" : "www-data",
+                "group" : "www-data"
+              }
+            },
+
+            "commands" : {
+              "01_enable_default_ssl_site_conf" : {
+                  "command" : "ln -s /etc/apache2/sites-available/default-ssl.conf /etc/apache2/sites-enabled/default-ssl.conf"
+              },
+              "02_enable_ssl_load" : {
+                  "command" : "ln -s /etc/apache2/mods-available/ssl.load /etc/apache2/mods-enabled/ssl.load"
+              },
+              "03_enable_ssl_conf" : {
+                  "command" : "ln -s /etc/apache2/mods-available/ssl.conf /etc/apache2/mods-enabled/ssl.conf"
+              },
+              "04_enable_socache_shmcb_load" : {
+                  "command" : "ln -s /etc/apache2/mods-available/socache_shmcb.load /etc/apache2/mods-enabled/socache_shmcb.load"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            },
+
+            "services" : {
+              "sysvinit" : {
+                "apache2" : { "enabled" : "true", "ensureRunning" : "true" }
+              }
+            }
+          },
+
+          "ElastiCacheClient" : {
+            "files" : {
+              "/etc/php/7.0/mods-available/aws-elasticache.ini" : {
+                "content" : { "Fn::Join" : ["", [
+                  "; configuration for Amazon ElastiCache Cluster Client (memcached)\n",
+                  "; priority=10\n",
+                  "extension=amazon-elasticache-cluster-client.so\n"
+                ]]},
+                "mode"    : "000644",
+                "owner"   : "root",
+                "group"   : "root"
+              }
+            },
+
+            "commands" : {
+              "01_wget_ElastiCacheClient" : {
+                  "command" : "wget -qO /tmp/ElastiCacheClient.zip https://s3.amazonaws.com/elasticache-downloads/ClusterClient/PHP-7.0/latest-64bit"
+              },
+              "02_unzip_ElastiCacheClient" : {
+                  "command" : "unzip -qj /tmp/ElastiCacheClient.zip artifact/amazon-elasticache-cluster-client.so -d /usr/lib/php/20151012/"
+              },
+              "03_softlink_ini" : {
+                  "command" : "ln -s /etc/php/7.0/mods-available/aws-elasticache.ini /etc/php/7.0/apache2/conf.d/10-aws-elasticache.ini"
+              },
+              "04_restart_apache2" : {
+                  "command" : "service apache2 restart"
+              },
+              "05_cleanup" : {
+                  "command" : "rm /tmp/ElastiCacheClient.zip"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          },
+
+          "ConfigurePHP" : {
+            "files" : {
+              "/tmp/mysql_php.ini.patch" : {
+                "content" : { "Fn::Join" : ["", [
+                  "--- php.ini.orig 2016-06-16 18:42:58.000000000 +0000\n",
+                  "+++ php.ini  2016-06-16 18:47:26.074325504 +0000\n",
+                  "@@ -1143,11 +1143,11 @@\n",
+                  " \n",
+                  " ; Default host for mysql_connect() (doesn't apply in safe mode).\n",
+                  " ; http://php.net/mysqli.default-host\n",
+                  "-mysqli.default_host =\n",
+                  "+mysqli.default_host = ", { "Ref" : "DBHost" }, "\n",
+                  " \n",
+                  " ; Default user for mysql_connect() (doesn't apply in safe mode).\n",
+                  " ; http://php.net/mysqli.default-user\n",
+                  "-mysqli.default_user =\n",
+                  "+mysqli.default_user = ", { "Ref" : "DBUser" }, "\n",
+                  " \n",
+                  " ; Default password for mysqli_connect() (doesn't apply in safe mode).\n",
+                  " ; Note that this is generally a *bad* idea to store passwords in this file.\n",
+                  " \n"
+                ]]},
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/tmp/memcache_patch.py" : {
+                "content" : { "Fn::Join" : ["", [
+                  "#!/usr/bin/env python\n",
+                  "# encoding: utf-8\n",
+                  "#\n",
+                  "# Parses JSON of AWS CacheCluster config and produces \n",
+                  "# a patch file for php.ini to set session.save_handler\n",
+                  "# and session.save_path\n",
+                  "from __future__ import print_function\n",
+                  "import boto3\n",
+                  "\n",
+                  "patch1 = \"\"\"--- php.ini.orig  2016-05-19 17:31:28.000000000 +0000\n",
+                  "+++ php.ini  2016-06-14 04:09:24.363179851 +0000\n",
+                  "@@ -1273,7 +1273,7 @@\n",
+                  " [Session]\n",
+                  " ; Handler used to store/retrieve data.\n",
+                  " ; http://php.net/session.save-handler\n",
+                  "-session.save_handler = files\n",
+                  "+session.save_handler = memcached\n",
+                  " \n",
+                  " ; Argument passed to save_handler.  In the case of files, this is the path\n",
+                  " ; where data files are stored. Note: Windows users have to change this\n",
+                  "@@ -1303,6 +1303,7 @@\n",
+                  " ; does not overwrite the process's umask.\n",
+                  " ; http://php.net/session.save-path\n",
+                  " ;session.save_path = \"/var/lib/php/sessions\"\n",
+                  "+session.save_path = '\"\"\"\n",
+                  "\n",
+                  "patch2 =\"\"\"'\n",
+                  " \n",
+                  " ; Whether to use strict session mode.\n",
+                  " ; Strict session mode does not accept uninitialized session ID and regenerate\"\"\"\n",
+                  "\n",
+                  "client = boto3.client('elasticache', region_name='", { "Ref" : "AWS::Region" }, "')\n",
+                  "\n",
+                  "data = client.describe_cache_clusters(\n",
+                  "    CacheClusterId='", {"Ref" : "CacheClusterId"}, "',\n",
+                  "    ShowCacheNodeInfo=True\n",
+                  ")\n",
+                  "\n",
+                  "conf_str =''\n",
+                  "\n",
+                  "for node in data['CacheClusters'][0]['CacheNodes']:\n",
+                  " conf_str += node['Endpoint']['Address'] + \":\" + str(node['Endpoint']['Port'] ) + ','\n",
+                  "\n",
+                  "conf_str = conf_str[:-1]\n",
+                  "\n",
+                  "print(patch1 + conf_str + patch2)\n"
+                ]]},
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root"
+              }
+            },
+
+            "commands" : {
+              "01_pip_install_boto3" : {
+                  "command" : "pip --quiet install boto3"
+              },
+              "02_generate_memcache_php_ini_patch" : {
+                  "command" : "/tmp/memcache_patch.py > /tmp/memcache_php.ini.patch"
+              },
+              "03_apply_memcache_php_ini_patch" : {
+                  "command" : "patch --silent /etc/php/7.0/apache2/php.ini /tmp/memcache_php.ini.patch"
+              },
+              "04_apply_mysql_php_ini_patch" : {
+                  "command" : "patch --silent /etc/php/7.0/apache2/php.ini /tmp/mysql_php.ini.patch"
+              },
+              "05_restart_apache2" : {
+                  "command" : "service apache2 restart"
+              },
+              "06_cleanup" : {
+                  "command" : "rm /tmp/memcache_patch.py /tmp/memcache_php.ini.patch /tmp/mysql_php.ini.patch"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          },
+
+          "HashFS" : {
+            "packages" : {
+              "apt" : {
+                "python-magic"    : []
+              }
+            },
+
+            "files" : {
+              "/tmp/secured_init.py" : {
+                "source" : { "Fn::Join" : ["", [ "https://s3.amazonaws.com/", {"Ref" : "HashFSCodeBucket"}, "/secured_init.py" ]]},
+                "mode"    : "000700",
+                "owner"   : "root",
+                "group"   : "root",
+                "authentication" : "S3BucketRoleAccess"
+              }
+            },
+
+            "commands" : {
+              "01_pip_install_requests" : {
+                  "command" : "pip --quiet install requests"
+              },
+              "02_hashfs_init" : {
+                  "command" : { "Fn::Join" : ["", [
+                    "/tmp/secured_init.py",
+                    "  --region ", { "Ref" : "AWS::Region" },
+                    "  --files-table ", {"Ref" : "HashFSFilesTable"},
+                    "  --locations-table ", {"Ref" : "HashFSLocationsTable"},
+                    "  --hash sha256",
+                    "  /var/www/html/"
+                  ]]}
+              },
+              "03__cleanup" : {
+                  "command" : "rm /tmp/secured_init.py"
+              },
+              "99_finish" : {
+                  "command" : ""
+              }
+            }
+          }
+        },
+
+        "AWS::CloudFormation::Authentication": {
+            "S3BucketRoleAccess" : {
+                "type": "S3",
+                "buckets": [
+                  { "Ref": "HashFSCodeBucket" }
+                ],
+                "roleName": { "Ref": "InstanceRole" }
+            }
+        }
+      },
+
+      "Properties" : {
+        "AssociatePublicIpAddress" : "true",
+        "InstanceMonitoring" : "false",
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroupId" } ],
+        "KeyName" : { "Ref" : "SSHKeyName" },
+        "ImageId" : { "Fn::If": [ "CreateEC2InstanceWithEBS",
+                        { "Fn::FindInMap" : [ "Ubuntu1604EBSRegionArch2AMI", { "Ref" : "AWS::Region" }, { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+                        { "Fn::FindInMap" : [ "Ubuntu1604EphemeralRegionArch2AMI", { "Ref" : "AWS::Region" }, { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] }
+        ]},
+        "IamInstanceProfile": { "Ref": "InstanceRoleInstanceProfile" },
+        "BlockDeviceMappings" : [
+          { "DeviceName" : "/dev/xvdf", "Ebs" : { "VolumeSize" : "1", "VolumeType" : "gp2" } }
+        ],
+        "UserData": { "Fn::Base64": { "Fn::Join": ["", [
+              "#!/bin/bash -xe\n",
+              "set -o errexit; set -o nounset; set -o pipefail\n",
+
+              "apt-get update\n",
+              "apt-get -y install python-pip\n",
+              "pip install --upgrade pip\n",
+              "pip install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz\n",
+
+              "ln -s /usr/local/init/ubuntu/cfn-hup /etc/init.d/cfn-hup\n",
+              "chmod +x /etc/init.d/cfn-hup\n",
+              "update-rc.d cfn-hup defaults\n",
+
+              "mkfs -t ext4 /dev/xvdf\n",
+              "mkdir /var/www\n",
+              "mount /dev/xvdf /var/www\n",
+              "echo \"/dev/xvdf /var/www ext4 defaults,nofail 0 2\" >> /etc/fstab\n",
+
+              "/usr/local/bin/cfn-init -v",
+              " --stack ", { "Ref": "AWS::StackName" },
+              " --resource EC2InstanceUbuntu1604",
+              " --configsets InstallAndRun",
+              " --region ", { "Ref": "AWS::Region" }, "\n",
+
+              "/usr/local/bin/cfn-signal -e $?",
+              " --stack ", { "Ref": "AWS::StackName" },
+              " --resource WebServerGroup",
+              " --region ", { "Ref": "AWS::Region" }, "\n"
+        ]] } }
+      },
+      "CreationPolicy": {
+        "ResourceSignal": {
+          "Timeout": "PT10M"
+        }
+      }
+    },
+
+
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "InstanceRole",
+          "PolicyDocument": {
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "autoscaling:Describe*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "cloudformation:Describe*",
+                  "cloudformation:GetTemplate"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "codecommit:BatchGetRepositories",
+                  "codecommit:Get*",
+                  "codecommit:List*",
+                  "codecommit:GitPull"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "elasticache:DescribeCacheClusters"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "ec2:DescribeInstances"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Action": [
+                  "iam:UploadServerCertificate"
+                ],
+                "Resource": "*",
+                "Effect": "Allow"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "s3:Get*"
+                ],
+                "Resource": "*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "dynamodb:ListTables",
+                  "dynamodb:DescribeTable",
+                  "dynamodb:GetItem",
+                  "dynamodb:BatchGetItem",
+                  "dynamodb:PutItem",
+                  "dynamodb:BatchWriteItem",
+                  "dynamodb:UpdateItem",
+                  "dynamodb:Query",
+                  "dynamodb:Scan",
+                  "dynamodb:ScanFilter"
+                ],
+                "Resource": [
+                  { "Fn::Join":[ "", [ "arn:aws:dynamodb:", { "Ref" : "AWS::Region" }, ":", { "Ref" : "AWS::AccountId" }, ":table/", { "Ref": "HashFSFilesTable" } ] ] },
+                  { "Fn::Join":[ "", [ "arn:aws:dynamodb:", { "Ref" : "AWS::Region" }, ":", { "Ref" : "AWS::AccountId" }, ":table/", { "Ref": "HashFSLocationsTable" } ] ] }
+                ]
+              }
+            ]
+          }
+        }]
+      }
+    },
+
+    "InstanceRoleInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "DependsOn" : "InstanceRole",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ { "Ref": "InstanceRole" } ]
+      }
+    },
+
+    "ElasticLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties" : {
+        "CrossZone" : "false",
+        "SecurityGroups" : [ { "Ref" : "LoadBalancerSecurityGroupId" } ],
+        "Subnets" : [ { "Ref" : "VpcSubnet" } ],
+        "Policies" : [ {
+          "PolicyName" : "ELBSSLNegotiation",
+          "PolicyType" : "SSLNegotiationPolicyType",
+          "Attributes" : [ {
+            "Name"  : "Reference-Security-Policy",
+            "Value" : "ELBSecurityPolicy-2015-05"
+          } ]
+        } ],
+        "Listeners" : [
+          {
+            "InstanceProtocol" : "HTTP",
+            "InstancePort" : "80",
+            "LoadBalancerPort" : "80",
+            "Protocol" : "HTTP"
+          },
+          {
+            "InstanceProtocol" : "HTTPS",
+            "InstancePort" : "443",
+            "LoadBalancerPort" : "443",
+            "Protocol" : "HTTPS",
+            "PolicyNames" :  [ "ELBSSLNegotiation" ],
+            "SSLCertificateId" : { "Fn::Join":[ "", [ "arn:aws:iam::", { "Ref" : "AWS::AccountId" }, ":server-certificate/", { "Ref" : "SSLCertName" } ] ] }
+          }
+        ],
+        "HealthCheck" : {
+          "Target" : "HTTP:80/test-aws.php",
+          "HealthyThreshold" : "2",
+          "UnhealthyThreshold" : "4",
+          "Interval" : "30",
+          "Timeout" : "15"
+        }
+      }
+    },
+
+    "WebServerGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "DependsOn" : "ElasticLoadBalancer",
+      "Properties" : {
+        "Tags" : [
+          {"Key" : "Project",  "Value" : { "Ref" : "ProjectTag"},     "PropagateAtLaunch" : "true" }
+        ],
+        "VPCZoneIdentifier" : [ { "Ref" : "VpcSubnet" } ],
+        "LaunchConfigurationName" : { "Ref" : "EC2InstanceUbuntu1604" },
+        "MinSize" : "1",
+        "MaxSize" : "5",
+        "DesiredCapacity" : { "Ref" : "InstanceCount" },
+        "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ]
+      },
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Count": { "Ref" : "InstanceCount" },
+          "Timeout" : "PT15M"
+        }
+      },
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "MinInstancesInService": "1",
+          "MaxBatchSize": "1",
+          "PauseTime" : "PT15M",
+          "WaitOnResourceSignals": "true"
+        }
+      }
+    }
+  },
+
+  "Outputs" : {
+    "TestURL" : {
+      "Description" : "URL of the test page",
+      "Value" :  { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ] }, "/test-aws.php" ] ] }
+    },
+    "WebappURL" : {
+      "Description" : "URL of the webapp",
+      "Value" :  { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ] }, "/index.php" ] ] }
+    }
+  }
+
+}

@@ -1,0 +1,105 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Deploys ElastiCache Cluster (memcached) to a VPC",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default":"CacheCluster Configuration" },
+          "Parameters" : [ "CacheNodeType", "NumberOfCacheNodes" ] },
+
+        { "Label" : { "default" : "Network Configuration" },
+          "Parameters" : [ "VpcId", "VpcSubnet", "InstanceSecurityGroup" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+
+    "CacheNodeType" : {
+      "Description" : "The compute and memory capacity of the nodes in the Cache Cluster",
+      "Type" : "String",
+      "Default" : "cache.t2.micro",
+      "AllowedValues" : [ "cache.t2.micro" ],
+      "ConstraintDescription" : "must be a valid Cache Node type"
+    },
+        
+    "NumberOfCacheNodes" : {
+      "Description" : "The number of Cache Nodes the Cache Cluster should have",
+      "Type": "Number",
+      "Default": "1",
+      "MinValue": "1",
+      "MaxValue": "5",
+      "ConstraintDescription" : "must be between 1 and 5"
+    },
+ 
+    "CacheSecurityGroupId": {
+      "Description": "Security Group ID to control access to the CacheCluster nodes",
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Default": "sg-8ce572f7",
+      "ConstraintDescription": "must be the name of an existing VPC Security Group"
+    },
+    
+    "VpcSubnet": {
+      "Description": "VPC subnet to associate with the instance",
+      "Type": "AWS::EC2::Subnet::Id",
+      "Default": "subnet-4e7d3064",       
+      "ConstraintDescription": "must be the name of an existing VPC subnet"
+    },
+
+    "VpcId": {
+      "Description": "Virtual Private Cloud (VPC) to deploy resources",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-eaae0a8d",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    }
+  },
+
+  "Resources" : {
+    "CacheCluster" : {
+      "Type": "AWS::ElastiCache::CacheCluster",
+      "Properties": {
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag"} } 
+        ],
+        "CacheNodeType"        : { "Ref" : "CacheNodeType" },
+        "VpcSecurityGroupIds"  : [ { "Ref" : "CacheSecurityGroupId" } ],
+        "CacheSubnetGroupName" : { "Ref" : "CacheSubnetGroup" },
+        "Engine"               : "memcached",
+        "Port"                 : "11211",
+        "NumCacheNodes"        : { "Ref" : "NumberOfCacheNodes" }
+      }
+    },
+
+    "CacheSubnetGroup" : {
+      "Type" : "AWS::ElastiCache::SubnetGroup",
+      "Properties" : {
+        "Description" : "CacheCluster Subnet Group",
+        "SubnetIds" : [ { "Ref" : "VpcSubnet" } ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "CacheClusterId": {
+      "Description" : "ElastiCache Cluster ID",
+      "Value" : { "Ref" : "CacheCluster" }
+    }
+  }
+
+}

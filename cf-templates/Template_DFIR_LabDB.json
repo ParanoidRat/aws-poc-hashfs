@@ -1,0 +1,135 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Deploys RDS instance (MySQL) to a VPC",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "MySQL Database Configuration" },
+          "Parameters" : [ "DBInstanceType", "DBName", "DBUser", "DBPassword" ] },
+
+        { "Label" : { "default" : "Network Configuration" },
+          "Parameters" : [ "DBSecurityGroupId", "VpcId" ] }
+      ],
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+
+    "DBInstanceType" : {
+      "Description" : "The computation and memory capacity of the DB instance",
+      "Type" : "String",
+      "Default" : "db.t2.micro",
+      "AllowedValues" : [ "db.t2.micro" ],
+      "ConstraintDescription" : "must be a valid DB instance class"
+    },
+
+    "DBName": {
+      "Description" : "The database name",
+      "Type": "String",
+      "Default": "MyDB",      
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBUser": {
+      "NoEcho": "true",
+      "Description" : "The database admin account username",
+      "Type": "String",
+      "Default": "MyDBuser",      
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description" : "The database admin account password",
+      "Type": "String",
+      "Default": "MyDBpassword",       
+      "MinLength": "8",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
+    },
+ 
+    "DBSecurityGroupId": {
+      "Description": "Security Group ID to control access to the DB",
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Default": "sg-8ce572f7",
+      "ConstraintDescription": "must be the name of an existing VPC Security Group"
+    },
+
+    "VpcId": {
+      "Description": "Virtual Private Cloud (VPC) to deploy resources",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-eaae0a8d",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    }
+  },
+
+  "Resources" : {
+    "MyDB" : {
+      "Type" : "AWS::RDS::DBInstance",
+      "DependsOn" : [ 
+        "DBParamGroup"
+      ],
+
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],        
+        "DBName"                : { "Ref" : "DBName" },
+        "AllocatedStorage"      : "5",
+        "DBInstanceClass"       : { "Ref" : "DBInstanceType" },
+        "Engine"                : "MySQL",
+        "EngineVersion"         : "5.7.11",
+        "Port"                  : "3306",
+        "StorageType"           : "gp2",        
+        "BackupRetentionPeriod" : "0",
+        "MasterUsername"        : { "Ref" : "DBUser" },
+        "MasterUserPassword"    : { "Ref" : "DBPassword" },
+        "DBParameterGroupName"  : { "Ref" : "DBParamGroup" },
+        "VPCSecurityGroups"     : [ { "Ref" : "DBSecurityGroupId" } ]
+      },
+      "DeletionPolicy" : "Delete"
+    },
+
+    "DBParamGroup" : {
+      "Type": "AWS::RDS::DBParameterGroup",
+      "Properties" : {
+        "Family" : "MySQL5.7",
+        "Description" : "DB Parameter Group: Logs saved to a table",
+          "Parameters" : {
+            "general_log" : "1",
+            "log_output"  : "TABLE"
+        }
+      }
+    }
+  },
+
+  "Outputs" : {
+    "DBHost": {
+      "Description" : "DBInstance",
+      "Value" : { "Fn::GetAtt": [ "MyDB", "Endpoint.Address" ] }
+    }
+  }
+
+}

@@ -1,0 +1,144 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Creates all necessary Security Groups",
+
+  "Metadata" : {
+    "AWS::CloudFormation::Interface" : {
+      "ParameterGroups" : [ 
+        { "Label" : { "default" : "Tags" },
+          "Parameters" : [ "ProjectTag" ] },
+
+        { "Label" : { "default" : "Network Configuration" },
+          "Parameters" : [ "SSHLocation", "VpcId" ] }
+      ],
+
+      "ParameterLabels" : {
+        "ProjectTag" : { "default" : "Project" }
+      }
+    }
+  },
+
+  "Parameters" : {
+    "ProjectTag" : {
+      "Description" : "Tag to be added to all resources created in the stack",
+      "Type" : "String",
+      "MaxLength": "20",
+      "Default" : "DFIR",
+      "ConstraintDescription": "must be 20 characters or less"
+    },
+    
+    "SSHLocation" : {
+      "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "71.187.38.77/32",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+    },
+
+    "VpcId": {
+      "Description": "Virtual Private Cloud (VPC) to deploy resources",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-eaae0a8d",
+      "ConstraintDescription": "must be the name of an existing EC2 VPC"
+    }
+  },
+
+  "Resources" : {
+    "DBSecurityGroup": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "DependsOn" : "InstanceSecurityGroup",
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        
+        "GroupDescription" : "Allows access to RDS MySQL only from specific InstanceSecurityGroup",
+        
+        "VpcId" : { "Ref" : "VpcId" },
+
+        "SecurityGroupIngress" : [
+          { "IpProtocol" : "tcp", "FromPort" : "3306", "ToPort" : "3306", "SourceSecurityGroupId" : { "Ref" : "InstanceSecurityGroup" } }
+         ]
+      }
+    },
+    
+    "CacheSecurityGroup": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "DependsOn" : "InstanceSecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Allows access to ElastiCache Cluster only from InstanceSecurityGroup",
+        
+        "VpcId" : { "Ref" : "VpcId" },
+
+        "SecurityGroupIngress" : [
+          { "IpProtocol" : "tcp", "FromPort" : "11211", "ToPort" : "11211", "SourceSecurityGroupId" : { "Ref" : "InstanceSecurityGroup" } }
+         ]
+      }
+    },
+
+    "InstanceSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Project",  "Value" : { "Ref" : "ProjectTag" } }
+        ],
+        
+        "GroupDescription" : "Allows SSH(22), HTTP(80), HTTPS(443) and ICMP from {SSHLocation}",
+        
+        "VpcId" : { "Ref" : "VpcId" },
+
+        "SecurityGroupIngress" : [
+          { "IpProtocol" : "icmp", "FromPort" : "-1",  "ToPort" : "-1",   "CidrIp" : { "Ref" : "SSHLocation"} },
+          { "IpProtocol" : "tcp",  "FromPort" : "22",  "ToPort" : "22",   "CidrIp" : { "Ref" : "SSHLocation"} },
+          { "IpProtocol" : "tcp",  "FromPort" : "80",  "ToPort" : "80",   "CidrIp" : { "Ref" : "SSHLocation"} },
+          { "IpProtocol" : "tcp",  "FromPort" : "443", "ToPort" : "443",  "CidrIp" : { "Ref" : "SSHLocation"} },
+          { "IpProtocol" : "tcp",  "FromPort" : "80",  "ToPort" : "80",   "SourceSecurityGroupId" : { "Ref" : "LoadBalancerSecurityGroup" } },
+          { "IpProtocol" : "tcp",  "FromPort" : "443",  "ToPort" : "443", "SourceSecurityGroupId" : { "Ref" : "LoadBalancerSecurityGroup" } }
+         ]
+      }
+    },
+    
+    "LoadBalancerSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Allow HTTP(80) and HTTPS(443) from anywhere.",
+        
+        "VpcId" : { "Ref" : "VpcId" },
+
+        "SecurityGroupIngress" : [
+          { "IpProtocol" : "tcp",  "FromPort" : "80",  "ToPort" : "80",  "CidrIp" : { "Ref" : "SSHLocation"} },
+          { "IpProtocol" : "tcp",  "FromPort" : "443", "ToPort" : "443", "CidrIp" : { "Ref" : "SSHLocation"} }
+         ],
+
+        "SecurityGroupEgress" : [
+          { "IpProtocol" : "tcp",  "FromPort" : "80",  "ToPort" : "80",  "CidrIp" : "0.0.0.0/0" },
+          { "IpProtocol" : "tcp",  "FromPort" : "443", "ToPort" : "443", "CidrIp" : "0.0.0.0/0" }
+         ]
+      }
+    }
+  },
+
+
+  "Outputs" : {
+    "DBSecurityGroupId": {
+      "Description" : "DB Security Group Id",
+      "Value" : { "Fn::GetAtt" : [ "DBSecurityGroup", "GroupId" ] }
+    },
+    "CacheSecurityGroupId": {
+      "Description" : "Cache Security Group Id",
+      "Value" : { "Fn::GetAtt" : [ "CacheSecurityGroup", "GroupId" ] }
+    },
+    "InstanceSecurityGroupId": {
+      "Description" : "Instance Security Group Id",
+      "Value" : { "Fn::GetAtt" : [ "InstanceSecurityGroup", "GroupId" ] }
+    },
+    "LoadBalancerSecurityGroupId": {
+      "Description" : "Load Balancer Security Group Id",
+      "Value" : { "Fn::GetAtt" : [ "LoadBalancerSecurityGroup", "GroupId" ] }
+    }
+  }
+
+}
